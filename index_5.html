@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MarketSight Report Generator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:Arial,Helvetica,sans-serif;background:#f4f4f1;color:#222;min-height:100vh;}
+.header{background:#fff;border-bottom:1px solid #ddd;padding:14px 2rem;display:flex;align-items:center;gap:12px;}
+.logo{font-size:15px;font-weight:700;letter-spacing:0.04em;}
+.divider{width:1px;height:18px;background:#ccc;}
+.header-sub{font-size:13px;color:#666;}
+.main{max-width:960px;margin:2rem auto;padding:0 1.5rem;}
+.card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;}
+.card-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#888;margin-bottom:1rem;}
+.upload-zone{border:2px dashed #ccc;border-radius:6px;padding:2.5rem;text-align:center;cursor:pointer;}
+.upload-zone:hover{border-color:#4a5bd6;background:#f7f8ff;}
+.upload-icon{font-size:28px;margin-bottom:10px;}
+.upload-label{font-size:15px;font-weight:600;color:#333;margin-bottom:5px;}
+.upload-hint{font-size:13px;color:#888;}
+input[type=file]{display:none;}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.field label{font-size:11px;font-weight:700;color:#888;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;}
+.field input{width:100%;font-size:13px;padding:8px 10px;border:1px solid #ddd;border-radius:5px;background:#fff;color:#222;outline:none;}
+.field input:focus{border-color:#4a5bd6;}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.btn{padding:9px 22px;font-size:13px;font-weight:600;border-radius:5px;cursor:pointer;border:none;}
+.btn-primary{background:#4a5bd6;color:#fff;}
+.btn-primary:hover{background:#3a4bb8;}
+.btn-green{background:#2d7d46;color:#fff;}
+.btn-green:hover{background:#236038;}
+.btn-gray{background:#555;color:#fff;}
+.btn-gray:hover{background:#333;}
+.status{font-size:13px;color:#666;padding:6px 0;min-height:20px;}
+.status.error{color:#c00;}
+.hint{font-size:12px;color:#888;margin-top:4px;}
+.report{display:none;background:#fff;border:1px solid #ddd;border-radius:8px;padding:2rem;margin-bottom:2rem;}
+.report.visible{display:block;}
+.q-nav{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:1.5rem;}
+.q-nav button{font-size:12px;padding:4px 11px;border:1px solid #ccc;border-radius:20px;background:#fff;color:#444;cursor:pointer;}
+.q-nav button:hover,.q-nav button.active{background:#4a5bd6;color:#fff;border-color:#4a5bd6;}
+@media print{
+  .header,.card,.actions,.q-nav,.status,.hint{display:none!important;}
+  .report{display:block!important;border:none;padding:0;}
+  body{background:#fff;}
+  .main{margin:0;padding:0;max-width:100%;}
+  body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">WICK</div>
+  <div class="divider"></div>
+  <div class="header-sub">MarketSight Report Generator</div>
+</div>
+<div class="main">
+  <div class="card">
+    <div class="card-title">1. Upload MarketSight Basic Overview</div>
+    <div class="upload-zone" id="dropzone" onclick="document.getElementById('filein').click()">
+      <div class="upload-icon">📊</div>
+      <div class="upload-label" id="uplabel">Drop your .xlsx file here</div>
+      <div class="upload-hint">or click to browse — MarketSight Basic Overview format</div>
+      <input type="file" id="filein" accept=".xlsx,.xls">
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">2. Report Details</div>
+    <div class="meta-grid">
+      <div class="field"><label>Survey / Project Name</label><input type="text" id="f-name" placeholder="e.g. Warren County Survey Results"></div>
+      <div class="field"><label>Prepared by</label><input type="text" id="f-prep" placeholder="e.g. Wick Research"></div>
+      <div class="field"><label>Methodology note</label><input type="text" id="f-meth" placeholder="e.g. IVR/Online, n=400, MOE +/- 4.9%"></div>
+      <div class="field"><label>Page footer label</label><input type="text" id="f-foot" placeholder="e.g. Warren County Survey Results"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">3. Generate and Export</div>
+    <div class="actions">
+      <button class="btn btn-primary" id="genbtn" onclick="processFile()">Generate Report</button>
+      <button class="btn btn-green" id="dlbtn" style="display:none" onclick="doDownload()">Download HTML</button>
+      <button class="btn btn-gray" id="printbtn" style="display:none" onclick="window.print()">Print / Save PDF</button>
+    </div>
+    <div class="status" id="statusmsg"></div>
+    <div class="hint" id="dlhint" style="display:none">To save as PDF: open the downloaded HTML in Chrome then File > Print > Save as PDF.</div>
+  </div>
+  <div class="report" id="reportdiv"></div>
+</div>
+<script>
+var questions = [];
+var reportMeta = {};
+var downloadContent = '';
+var CHART_W = 500;
+
+var dz = document.getElementById('dropzone');
+var fi = document.getElementById('filein');
+
+dz.addEventListener('dragover', function(e){e.preventDefault();dz.style.borderColor='#4a5bd6';});
+dz.addEventListener('dragleave', function(){dz.style.borderColor='#ccc';});
+dz.addEventListener('drop', function(e){
+  e.preventDefault(); dz.style.borderColor='#ccc';
+  var f=e.dataTransfer.files[0];
+  if(f){fi.files=e.dataTransfer.files; fileReady(f.name);}
+});
+fi.addEventListener('change', function(){if(fi.files[0])fileReady(fi.files[0].name);});
+
+function fileReady(name){
+  document.getElementById('uplabel').textContent='Loaded: '+name;
+  setStatus('File ready. Fill in details and click Generate Report.');
+}
+function setStatus(msg,isErr){
+  var el=document.getElementById('statusmsg');
+  el.textContent=msg;
+  el.className=isErr?'status error':'status';
+}
+
+function processFile(){
+  var file=fi.files[0];
+  if(!file){setStatus('Please select a .xlsx file first.',true);return;}
+  reportMeta={
+    name: document.getElementById('f-name').value||'Survey Results',
+    prep: document.getElementById('f-prep').value||'',
+    meth: document.getElementById('f-meth').value||'',
+    foot: document.getElementById('f-foot').value||(document.getElementById('f-name').value||'Survey Results')
+  };
+  setStatus('Parsing...');
+  var reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      var wb=XLSX.read(e.target.result,{type:'array'});
+      var ws=wb.Sheets[wb.SheetNames[0]];
+      var rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+      questions=parseData(rows);
+      if(!questions.length){setStatus('No questions found.',true);return;}
+      var reportHTML=buildReportHTML();
+      document.getElementById('reportdiv').innerHTML=buildScreenReport(reportHTML);
+      document.getElementById('reportdiv').className='report visible';
+      downloadContent=buildDownloadFile(reportHTML);
+      setStatus(questions.length+' questions parsed successfully.');
+      document.getElementById('dlbtn').style.display='inline-block';
+      document.getElementById('printbtn').style.display='inline-block';
+      document.getElementById('dlhint').style.display='block';
+    }catch(err){setStatus('Error: '+err.message,true);}
+  };
+  reader.onerror=function(){setStatus('Could not read file.',true);};
+  reader.readAsArrayBuffer(file);
+}
+
+function cv(row,col){return String(row[col]||'').trim();}
+function isQ(s){return /^Q\d+[a-zA-Z]?[_\.\s]/i.test(s);}
+
+function parseData(rows){
+  var qi=[];
+  for(var i=0;i<rows.length;i++)if(isQ(cv(rows[i],0)))qi.push(i);
+  var out=[];
+  var SKIP={Count:1,'Column %':1,'Sample Size':1};
+  for(var k=0;k<qi.length;k++){
+    var qr=qi[k], nq=k+1<qi.length?qi[k+1]:rows.length;
+    var lbl=cv(rows[qr],0);
+    var txt=qr>0?cv(rows[qr-1],0):'';
+    if(cv(rows[qr+1],0)!=='Sample Size')continue;
+    var ss=parseFloat(cv(rows[qr+1],1))||0;
+    var opts=[],pending=null;
+    for(var r=qr+2;r<nq;r++){
+      var r0=cv(rows[r],0),r1=cv(rows[r],1);
+      if(!r0)continue;
+      if(r0==='Count'){if(pending!==null){opts.push({label:pending,count:parseFloat(r1)||0,pct:0});pending=null;}continue;}
+      if(r0==='Column %'){if(opts.length)opts[opts.length-1].pct=parseFloat(r1)||0;continue;}
+      if(SKIP[r0])continue;
+      if(r1==='')pending=r0;
+    }
+    if(opts.length)out.push({lbl:lbl,txt:txt,ss:ss,opts:opts});
+  }
+  return out;
+}
+
+function toP(v){return(parseFloat(v)||0)*100;}
+function fmtP(v){return toP(v).toFixed(1)+'%';}
+function fmtN(v){return Math.round(v).toLocaleString();}
+function parseLabel(s){
+  var m=s.match(/^(Q\d+[a-zA-Z]?)[_\.\s](.+)$/i);
+  return m?[m[1].toUpperCase(),m[2].replace(/_/g,' ')]:['',s];
+}
+
+function buildQBlock(q, idx, total){
+  var lp=parseLabel(q.lbl);
+  var title=(lp[0]?lp[0]+' : ':'')+lp[1];
+  var opts=q.opts;
+  var ps=[];
+  var mx=0;
+  for(var i=0;i<opts.length;i++){var p=toP(opts[i].pct);ps.push(p);if(p>mx)mx=p;}
+  if(mx<1)mx=1;
+  var sc=mx>75?100:mx>40?75:50;
+  var totalN=0;
+  for(var i=0;i<opts.length;i++)totalN+=opts[i].count;
+
+  // Chart — nested table with background-color td for bars (survives PDF print)
+  var chart='<table style="border-collapse:collapse;width:100%;margin-bottom:18px;">';
+  for(var ci=0;ci<opts.length;ci++){
+    var w=Math.max(Math.round((ps[ci]/sc)*CHART_W),3);
+    chart+='<tr>';
+    chart+='<td style="width:220px;font-size:12px;color:#444;text-align:right;padding-right:20px;line-height:1.4;vertical-align:middle;">'+opts[ci].label+'</td>';
+    chart+='<td style="vertical-align:middle;padding:3px 0;">';
+    chart+='<table style="border-collapse:collapse;"><tr>';
+    chart+='<td style="width:'+w+'px;height:22px;background-color:#5b7be8;font-size:1px;">&nbsp;</td>';
+    chart+='<td style="font-size:12px;color:#444;padding-left:8px;vertical-align:middle;">'+fmtP(opts[ci].pct)+'</td>';
+    chart+='</tr></table>';
+    chart+='</td></tr>';
+  }
+  chart+='</table>';
+
+  // Data table
+  var table='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">';
+  table+='<thead><tr>';
+  table+='<th style="background-color:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;">Value</th>';
+  table+='<th style="background-color:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;">Frequency</th>';
+  table+='<th style="background-color:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;">Percent</th>';
+  table+='</tr></thead><tbody>';
+  for(var ti=0;ti<opts.length;ti++){
+    table+='<tr>';
+    table+='<td style="border:1px solid #c8cad4;padding:7px 12px;color:#333;">'+opts[ti].label+'</td>';
+    table+='<td style="border:1px solid #c8cad4;padding:7px 12px;color:#333;">'+fmtN(opts[ti].count)+'</td>';
+    table+='<td style="border:1px solid #c8cad4;padding:7px 12px;color:#333;">'+fmtP(opts[ti].pct)+'</td>';
+    table+='</tr>';
+  }
+  table+='<tr>';
+  table+='<td style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background-color:#e4e6ef;"><strong>Total</strong></td>';
+  table+='<td style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background-color:#e4e6ef;"><strong>'+fmtN(totalN)+'</strong></td>';
+  table+='<td style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background-color:#e4e6ef;"><strong>100%</strong></td>';
+  table+='</tr></tbody></table>';
+
+  var block='<div id="q'+idx+'" style="margin-bottom:3rem;padding-bottom:2rem;border-bottom:1px solid #e0e0e0;page-break-inside:avoid;">';
+  block+='<div style="font-size:14px;font-weight:700;color:#111;margin-bottom:3px;">'+title+'</div>';
+  if(q.txt)block+='<div style="font-size:13px;color:#555;margin-bottom:3px;line-height:1.5;">'+q.txt+'</div>';
+  block+='<div style="font-size:13px;color:#555;margin-bottom:16px;">Sample Size: '+fmtN(q.ss)+'</div>';
+  block+=chart+table;
+  block+='<div style="font-size:11px;color:#aaa;display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid #e0e0e0;">';
+  block+='<span>'+reportMeta.foot+'</span><span>'+(idx+1)+' of '+total+'</span></div>';
+  block+='</div>';
+  return block;
+}
+
+function buildReportHTML(){
+  var total=questions.length;
+  var header='<div style="padding-bottom:14px;border-bottom:2px solid #bbb;margin-bottom:2rem;">';
+  header+='<h2 style="font-size:24px;font-weight:400;color:#111;margin-bottom:6px;">'+reportMeta.name+'</h2>';
+  header+='<div style="font-size:15px;font-weight:700;color:#111;margin-bottom:8px;">Survey Results</div>';
+  if(reportMeta.prep)header+='<div style="font-size:13px;color:#444;line-height:1.8;">Prepared by '+reportMeta.prep+'</div>';
+  if(reportMeta.meth)header+='<div style="font-size:13px;color:#444;line-height:1.8;">'+reportMeta.meth+'</div>';
+  header+='</div>';
+  var blocks='';
+  for(var i=0;i<questions.length;i++)blocks+=buildQBlock(questions[i],i,total);
+  return header+blocks;
+}
+
+function buildScreenReport(reportHTML){
+  var nav='<div class="q-nav">';
+  for(var i=0;i<questions.length;i++){
+    var lp=parseLabel(questions[i].lbl);
+    nav+='<button onclick="scrollQ('+i+')">'+(lp[0]||'Q'+(i+1))+'</button>';
+  }
+  nav+='</div>';
+  return nav+reportHTML;
+}
+
+function buildDownloadFile(reportHTML){
+  var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+reportMeta.name+'</title>';
+  full+='<style>body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:0 auto;padding:2rem;}';
+  full+='@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}</style>';
+  full+='</head><body>'+reportHTML+'</body></html>';
+  return full;
+}
+
+function scrollQ(idx){
+  var el=document.getElementById('q'+idx);
+  if(el)el.scrollIntoView({behavior:'smooth',block:'start'});
+  var btns=document.querySelectorAll('.q-nav button');
+  for(var i=0;i<btns.length;i++)btns[i].classList.toggle('active',i===idx);
+}
+
+function doDownload(){
+  if(!downloadContent)return;
+  var blob=new Blob([downloadContent],{type:'text/html'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url;
+  a.download=(reportMeta.name||'report').replace(/[^a-z0-9]/gi,'_')+'_report.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){URL.revokeObjectURL(url);},2000);
+}
+</script>
+</body>
+</html>
