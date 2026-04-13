@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MarketSight Report Generator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:Arial,Helvetica,sans-serif;background:#f4f4f1;color:#222;min-height:100vh;}
+.header{background:#fff;border-bottom:1px solid #ddd;padding:14px 2rem;display:flex;align-items:center;gap:12px;}
+.logo{font-size:15px;font-weight:700;letter-spacing:0.04em;}
+.divider{width:1px;height:18px;background:#ccc;}
+.header-sub{font-size:13px;color:#666;}
+.main{max-width:960px;margin:2rem auto;padding:0 1.5rem;}
+.card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;}
+.card-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#888;margin-bottom:1rem;}
+.upload-zone{border:2px dashed #ccc;border-radius:6px;padding:2.5rem;text-align:center;cursor:pointer;}
+.upload-zone:hover{border-color:#4a5bd6;background:#f7f8ff;}
+.upload-icon{font-size:28px;margin-bottom:10px;}
+.upload-label{font-size:15px;font-weight:600;color:#333;margin-bottom:5px;}
+.upload-hint{font-size:13px;color:#888;}
+input[type=file]{display:none;}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.field label{font-size:11px;font-weight:700;color:#888;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;}
+.field input{width:100%;font-size:13px;padding:8px 10px;border:1px solid #ddd;border-radius:5px;background:#fff;color:#222;outline:none;}
+.field input:focus{border-color:#4a5bd6;}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.btn{padding:9px 22px;font-size:13px;font-weight:600;border-radius:5px;cursor:pointer;border:none;}
+.btn-primary{background:#4a5bd6;color:#fff;}
+.btn-primary:hover{background:#3a4bb8;}
+.btn-green{background:#2d7d46;color:#fff;}
+.btn-green:hover{background:#236038;}
+.btn-gray{background:#555;color:#fff;}
+.btn-gray:hover{background:#333;}
+.status{font-size:13px;color:#666;padding:6px 0;min-height:20px;}
+.status.error{color:#c00;}
+.hint{font-size:12px;color:#888;margin-top:4px;}
+
+/* Report */
+.report{display:none;}
+.report.visible{display:block;background:#fff;border:1px solid #ddd;border-radius:8px;padding:2rem;margin-bottom:2rem;}
+.r-header{padding-bottom:14px;border-bottom:2px solid #bbb;margin-bottom:2rem;}
+.r-header h2{font-size:24px;font-weight:400;color:#111;margin-bottom:6px;}
+.r-subtitle{font-size:15px;font-weight:700;color:#111;margin-bottom:10px;}
+.r-meta{font-size:13px;color:#444;line-height:1.8;}
+.q-nav{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:1.5rem;}
+.q-nav button{font-size:12px;padding:4px 11px;border:1px solid #ccc;border-radius:20px;background:#fff;color:#444;cursor:pointer;}
+.q-nav button:hover,.q-nav button.active{background:#4a5bd6;color:#fff;border-color:#4a5bd6;}
+.q-block{margin-bottom:3rem;padding-bottom:2rem;border-bottom:1px solid #e0e0e0;}
+.q-block:last-child{border-bottom:none;}
+.q-title{font-size:14px;font-weight:700;color:#111;margin-bottom:3px;}
+.q-text{font-size:13px;color:#555;margin-bottom:3px;line-height:1.5;}
+.q-sample{font-size:13px;color:#555;margin-bottom:16px;}
+.chart-wrap{margin-bottom:18px;}
+/* Chart uses table layout so it works in downloaded HTML too */
+.chart-table{border-collapse:collapse;width:100%;}
+.chart-table td{padding:2px 0;vertical-align:middle;}
+.chart-lbl-cell{width:220px;font-size:12px;color:#444;text-align:right;padding-right:20px;line-height:1.3;white-space:normal;vertical-align:middle;}
+.chart-bar-cell{padding-right:8px;vertical-align:middle;}
+.chart-bar{height:22px;background:#5b7be8;display:inline-block;min-width:3px;}
+.chart-pct-cell{font-size:12px;color:#444;white-space:nowrap;vertical-align:middle;}
+.ms-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;}
+.ms-table th{background:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;}
+.ms-table td{border:1px solid #c8cad4;padding:7px 12px;color:#333;}
+.ms-table tr.tr-total td{font-weight:700;background:#e4e6ef;}
+.ms-table tr:hover td{background:#f8f9fc;}
+.q-footer{font-size:11px;color:#aaa;display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid #e0e0e0;}
+
+@media print{
+  .header,.card,.actions,.q-nav,.status,.hint{display:none!important;}
+  .report{display:block!important;border:none;padding:0;}
+  .q-block{page-break-inside:avoid;}
+  body{background:#fff;}
+  .main{margin:0;padding:0;max-width:100%;}
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">WICK</div>
+  <div class="divider"></div>
+  <div class="header-sub">MarketSight Report Generator</div>
+</div>
+<div class="main">
+  <div class="card">
+    <div class="card-title">1. Upload MarketSight Basic Overview</div>
+    <div class="upload-zone" id="dropzone" onclick="document.getElementById('filein').click()">
+      <div class="upload-icon">📊</div>
+      <div class="upload-label" id="uplabel">Drop your .xlsx file here</div>
+      <div class="upload-hint">or click to browse — MarketSight Basic Overview format</div>
+      <input type="file" id="filein" accept=".xlsx,.xls">
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">2. Report Details</div>
+    <div class="meta-grid">
+      <div class="field"><label>Survey / Project Name</label><input type="text" id="f-name" placeholder="e.g. Warren County Survey Results"></div>
+      <div class="field"><label>Prepared by</label><input type="text" id="f-prep" placeholder="e.g. Wick Research"></div>
+      <div class="field"><label>Methodology note</label><input type="text" id="f-meth" placeholder="e.g. IVR/Online, n=400, MOE +/- 4.9%"></div>
+      <div class="field"><label>Page footer label</label><input type="text" id="f-foot" placeholder="e.g. Warren County Survey Results"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">3. Generate and Export</div>
+    <div class="actions">
+      <button class="btn btn-primary" id="genbtn" onclick="processFile()">Generate Report</button>
+      <button class="btn btn-green" id="dlbtn" style="display:none" onclick="doDownload()">Download HTML</button>
+      <button class="btn btn-gray" id="printbtn" style="display:none" onclick="window.print()">Print / Save PDF</button>
+    </div>
+    <div class="status" id="statusmsg"></div>
+    <div class="hint" id="dlhint" style="display:none">To save as PDF: click Print / Save PDF, or open the downloaded HTML in Chrome and use File > Print > Save as PDF.</div>
+  </div>
+  <div class="report" id="reportdiv"></div>
+</div>
+<script>
+var questions = [];
+var reportMeta = {};
+var downloadContent = '';
+var CHART_WIDTH = 580;
+
+var dz = document.getElementById('dropzone');
+var fi = document.getElementById('filein');
+
+dz.addEventListener('dragover', function(e) { e.preventDefault(); dz.style.borderColor='#4a5bd6'; });
+dz.addEventListener('dragleave', function() { dz.style.borderColor='#ccc'; });
+dz.addEventListener('drop', function(e) {
+  e.preventDefault();
+  dz.style.borderColor = '#ccc';
+  var f = e.dataTransfer.files[0];
+  if (f) { fi.files = e.dataTransfer.files; fileReady(f.name); }
+});
+fi.addEventListener('change', function() {
+  if (fi.files[0]) fileReady(fi.files[0].name);
+});
+
+function fileReady(name) {
+  document.getElementById('uplabel').textContent = 'Loaded: ' + name;
+  setStatus('File ready. Fill in details and click Generate Report.');
+}
+
+function setStatus(msg, isErr) {
+  var el = document.getElementById('statusmsg');
+  el.textContent = msg;
+  el.className = isErr ? 'status error' : 'status';
+}
+
+function processFile() {
+  var file = fi.files[0];
+  if (!file) { setStatus('Please select a .xlsx file first.', true); return; }
+  reportMeta = {
+    name: document.getElementById('f-name').value || 'Survey Results',
+    prep: document.getElementById('f-prep').value || '',
+    meth: document.getElementById('f-meth').value || '',
+    foot: document.getElementById('f-foot').value || document.getElementById('f-name').value || 'Survey Results'
+  };
+  setStatus('Parsing...');
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var wb = XLSX.read(e.target.result, {type: 'array'});
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var rows = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
+      questions = parseData(rows);
+      if (!questions.length) { setStatus('No questions found. Check this is a Basic Overview export.', true); return; }
+      renderReport();
+      setStatus(questions.length + ' questions parsed successfully.');
+      document.getElementById('dlbtn').style.display = 'inline-block';
+      document.getElementById('printbtn').style.display = 'inline-block';
+      document.getElementById('dlhint').style.display = 'block';
+    } catch(err) {
+      setStatus('Error: ' + err.message, true);
+    }
+  };
+  reader.onerror = function() { setStatus('Could not read file.', true); };
+  reader.readAsArrayBuffer(file);
+}
+
+function cellVal(row, col) {
+  return String(row[col] || '').trim();
+}
+
+function isQVar(s) {
+  return /^Q\d+[a-zA-Z]?[_\.\s]/i.test(s);
+}
+
+function parseData(rows) {
+  var qi = [];
+  for (var i = 0; i < rows.length; i++) {
+    if (isQVar(cellVal(rows[i], 0))) qi.push(i);
+  }
+  var out = [];
+  var SKIP = {Count: 1, 'Column %': 1, 'Sample Size': 1};
+  for (var k = 0; k < qi.length; k++) {
+    var qr = qi[k];
+    var nq = k + 1 < qi.length ? qi[k+1] : rows.length;
+    var lbl = cellVal(rows[qr], 0);
+    var txt = qr > 0 ? cellVal(rows[qr-1], 0) : '';
+    if (cellVal(rows[qr+1], 0) !== 'Sample Size') continue;
+    var ss = parseFloat(cellVal(rows[qr+1], 1)) || 0;
+    var opts = [];
+    var pending = null;
+    for (var r = qr+2; r < nq; r++) {
+      var r0 = cellVal(rows[r], 0);
+      var r1 = cellVal(rows[r], 1);
+      if (!r0) continue;
+      if (r0 === 'Count') {
+        if (pending !== null) { opts.push({label: pending, count: parseFloat(r1)||0, pct: 0}); pending = null; }
+        continue;
+      }
+      if (r0 === 'Column %') {
+        if (opts.length) opts[opts.length-1].pct = parseFloat(r1) || 0;
+        continue;
+      }
+      if (SKIP[r0]) continue;
+      if (r1 === '') pending = r0;
+    }
+    if (opts.length) out.push({lbl: lbl, txt: txt, ss: ss, opts: opts});
+  }
+  return out;
+}
+
+function toP(v) { return (parseFloat(v) || 0) * 100; }
+function fmtP(v) { return toP(v).toFixed(1) + '%'; }
+function fmtN(v) { return Math.round(v).toLocaleString(); }
+
+function parseLabel(s) {
+  var m = s.match(/^(Q\d+[a-zA-Z]?)[_\.\s](.+)$/i);
+  return m ? {num: m[1].toUpperCase(), name: m[2].replace(/_/g, ' ')} : {num: '', name: s};
+}
+
+function buildChart(opts, chartWidth, inline) {
+  var ps = [];
+  var mx = 0;
+  for (var i = 0; i < opts.length; i++) {
+    var p = toP(opts[i].pct);
+    ps.push(p);
+    if (p > mx) mx = p;
+  }
+  if (mx < 1) mx = 1;
+  var sc = mx > 75 ? 100 : mx > 40 ? 75 : 50;
+
+  var html = '<div style="margin-bottom:18px;"><table style="border-collapse:collapse;width:100%;">';
+  for (var ci = 0; ci < opts.length; ci++) {
+    var w = Math.max(Math.round((ps[ci] / sc) * chartWidth), 3);
+    html += '<tr>';
+    html += '<td style="width:220px;font-size:12px;color:#444;text-align:right;padding-right:20px;line-height:1.3;vertical-align:middle;">' + opts[ci].label + '</td>';
+    html += '<td style="vertical-align:middle;padding:3px 0;">';
+    html += '<table style="border-collapse:collapse;"><tr>';
+    html += '<td style="width:' + w + 'px;height:22px;background-color:#5b7be8;font-size:1px;">&nbsp;</td>';
+    html += '<td style="font-size:12px;color:#444;padding-left:8px;vertical-align:middle;white-space:nowrap;">' + fmtP(opts[ci].pct) + '</td>';
+    html += '</tr></table>';
+    html += '</td>';
+    html += '</tr>';
+  }
+  html += '</table></div>';
+  return html;
+}
+
+function buildTable(opts, inline) {
+  var totalN = 0;
+  for (var i = 0; i < opts.length; i++) totalN += opts[i].count;
+  var tblS  = inline ? 'style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;"' : 'class="ms-table"';
+  var thS   = inline ? 'style="background:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;"' : '';
+  var tdS   = inline ? 'style="border:1px solid #c8cad4;padding:7px 12px;color:#333;"' : '';
+  var totS  = inline ? 'style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background:#e4e6ef;"' : '';
+  var html = '<table ' + tblS + '><thead><tr>';
+  html += '<th ' + thS + '>Value</th><th ' + thS + '>Frequency</th><th ' + thS + '>Percent</th>';
+  html += '</tr></thead><tbody>';
+  for (var ti = 0; ti < opts.length; ti++) {
+    html += '<tr><td ' + tdS + '>' + opts[ti].label + '</td><td ' + tdS + '>' + fmtN(opts[ti].count) + '</td><td ' + tdS + '>' + fmtP(opts[ti].pct) + '</td></tr>';
+  }
+  html += '<tr><td ' + totS + '><strong>Total</strong></td><td ' + totS + '><strong>' + fmtN(totalN) + '</strong></td><td ' + totS + '><strong>100%</strong></td></tr>';
+  html += '</tbody></table>';
+  return html;
+}
+
+function buildBody(forDownload, chartWidth) {
+  var total = questions.length;
+  var nav = '';
+  if (!forDownload) {
+    nav = '<div class="q-nav">';
+    for (var ni = 0; ni < questions.length; ni++) {
+      var nlp = parseLabel(questions[ni].lbl);
+      nav += '<button onclick="scrollQ(' + ni + ')">' + (nlp.num || 'Q'+(ni+1)) + '</button>';
+    }
+    nav += '</div>';
+  }
+
+  var html = '<div class="r-header"><h2>' + reportMeta.name + '</h2><div class="r-subtitle">Survey Results</div>';
+  if (reportMeta.prep) html += '<div class="r-meta">Prepared by ' + reportMeta.prep + '</div>';
+  if (reportMeta.meth) html += '<div class="r-meta">' + reportMeta.meth + '</div>';
+  html += '</div>' + nav;
+
+  for (var idx = 0; idx < questions.length; idx++) {
+    var q = questions[idx];
+    var lp = parseLabel(q.lbl);
+    var title = (lp.num ? lp.num + ' : ' : '') + lp.name;
+    html += '<div class="q-block" id="q' + idx + '">';
+    html += '<div class="q-title">' + title + '</div>';
+    if (q.txt) html += '<div class="q-text">' + q.txt + '</div>';
+    html += '<div class="q-sample">Sample Size: ' + fmtN(q.ss) + '</div>';
+    html += buildChart(q.opts, chartWidth, forDownload);
+    html += buildTable(q.opts, forDownload);
+    html += '<div class="q-footer"><span>' + reportMeta.foot + '</span><span>' + (idx+1) + ' of ' + total + '</span></div>';
+    html += '</div>';
+  }
+  return html;
+}
+
+function renderReport() {
+  var el = document.getElementById('reportdiv');
+  el.innerHTML = buildBody(false, CHART_WIDTH);
+  el.className = 'report visible';
+  downloadContent = buildDownloadFile();
+}
+
+function scrollQ(idx) {
+  var el = document.getElementById('q' + idx);
+  if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+  var btns = document.querySelectorAll('.q-nav button');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', i === idx);
+}
+
+function buildDownloadFile() {
+  var body = buildBody(true, 500);
+  var css = 'body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:0 auto;padding:2rem;}' +
+    '.r-header{padding-bottom:14px;border-bottom:2px solid #bbb;margin-bottom:2rem;}' +
+    'h2{font-size:24px;font-weight:400;color:#111;margin-bottom:6px;}' +
+    '.r-subtitle{font-size:15px;font-weight:700;color:#111;margin-bottom:10px;}' +
+    '.r-meta{font-size:13px;color:#444;line-height:1.8;}' +
+    '.q-block{margin-bottom:3rem;padding-bottom:2rem;border-bottom:1px solid #e0e0e0;page-break-inside:avoid;}' +
+    '.q-block:last-child{border-bottom:none;}' +
+    '.q-title{font-size:14px;font-weight:700;color:#111;margin-bottom:3px;}' +
+    '.q-text{font-size:13px;color:#555;margin-bottom:3px;line-height:1.5;}' +
+    '.q-sample{font-size:13px;color:#555;margin-bottom:16px;}' +
+    '.chart-wrap{margin-bottom:18px;}' +
+    '.chart-table{border-collapse:collapse;width:100%;}' +
+    '.chart-table td{padding:2px 0;vertical-align:middle;}' +
+    '.chart-lbl-cell{width:220px;font-size:12px;color:#444;text-align:right;padding-right:18px;line-height:1.3;vertical-align:middle;}' +
+    '.chart-bar-cell{padding-right:8px;vertical-align:middle;}' +
+    '.chart-bar{height:22px;background:#5b7be8;display:inline-block;min-width:3px;}' +
+    '.chart-pct-cell{font-size:12px;color:#444;white-space:nowrap;vertical-align:middle;}' +
+    '.ms-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;}' +
+    '.ms-table th{background:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;}' +
+    '.ms-table td{border:1px solid #c8cad4;padding:7px 12px;color:#333;}' +
+    '.ms-table tr.tr-total td{font-weight:700;background:#e4e6ef;}' +
+    '.q-footer{font-size:11px;color:#aaa;display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid #e0e0e0;}' +
+    '@media print{.q-block{page-break-inside:avoid;}}';
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + reportMeta.name + '</title><style>' + css + '</style></head><body>' + body + '</body></html>';
+}
+
+function doDownload() {
+  if (!downloadContent) return;
+  var blob = new Blob([downloadContent], {type: 'text/html'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = (reportMeta.name || 'report').replace(/[^a-z0-9]/gi, '_') + '_report.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+}
+</script>
+</body>
+</html>
