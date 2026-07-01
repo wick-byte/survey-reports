@@ -73,6 +73,14 @@ input[type=file]{display:none;}
       <div class="field"><label>Prepared by</label><input type="text" id="f-prep" placeholder="e.g. Wick Research"></div>
       <div class="field"><label>Methodology note</label><input type="text" id="f-meth" placeholder="e.g. IVR/Online, n=400, MOE +/- 4.9%"></div>
       <div class="field"><label>Page footer label</label><input type="text" id="f-foot" placeholder="e.g. Warren County Survey Results"></div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>Client / Firm Logo (PNG or JPG)</label>
+        <div id="logo-zone" style="border:1px dashed #ccc;border-radius:5px;padding:12px 16px;cursor:pointer;font-size:13px;color:#888;display:flex;align-items:center;gap:12px;" onclick="document.getElementById('logoin').click()">
+          <span id="logo-label">Click to upload logo — optional</span>
+          <img id="logo-preview" style="display:none;max-height:40px;max-width:160px;object-fit:contain;" />
+          <input type="file" id="logoin" accept="image/png,image/jpeg,image/gif,image/svg+xml">
+        </div>
+      </div>
     </div>
   </div>
   <div class="card">
@@ -89,6 +97,7 @@ input[type=file]{display:none;}
 </div>
 <script>
 var questions = [];
+var demos = [];
 var reportMeta = {};
 var downloadContent = '';
 var CHART_W = 500;
@@ -104,6 +113,20 @@ dz.addEventListener('drop', function(e){
   if(f){fi.files=e.dataTransfer.files; fileReady(f.name);}
 });
 fi.addEventListener('change', function(){if(fi.files[0])fileReady(fi.files[0].name);});
+
+var logoDataURL = '';
+var logoin = document.getElementById('logoin');
+logoin.addEventListener('change', function(){
+  if(!logoin.files[0]) return;
+  var reader = new FileReader();
+  reader.onload = function(e){
+    logoDataURL = e.target.result;
+    document.getElementById('logo-preview').src = logoDataURL;
+    document.getElementById('logo-preview').style.display = 'block';
+    document.getElementById('logo-label').textContent = logoin.files[0].name;
+  };
+  reader.readAsDataURL(logoin.files[0]);
+});
 
 function fileReady(name){
   document.getElementById('uplabel').textContent='Loaded: '+name;
@@ -132,6 +155,7 @@ function processFile(){
       var ws=wb.Sheets[wb.SheetNames[0]];
       var rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
       questions=parseData(rows);
+      demos=parseDemos(rows);
       if(!questions.length){setStatus('No questions found.',true);return;}
       var reportHTML=buildReportHTML();
       document.getElementById('reportdiv').innerHTML=buildScreenReport(reportHTML);
@@ -148,21 +172,113 @@ function processFile(){
 }
 
 function cv(row,col){return String(row[col]||'').trim();}
-function isQ(s){return /^Q\d+[a-zA-Z]?[_\.\s]/i.test(s);}
+
+// True if this looks like a top-level survey variable (SA_, SB_, SC_, SD_, Q-prefixed)
+// but NOT a SATA sub-item like SD_B4_1a, SD_B4_1b (single letter suffix after digit)
+function isQ(s){
+  // Exclude SATA sub-items: pattern ends in a single lowercase letter after the number, e.g. SD_B4_1a
+  if(/^S[A-Z]_[A-Z0-9]+_\d+[a-z]\s/i.test(s))return false;
+  return /^(Q\d+[a-zA-Z0-9]*|S[A-Z]_[A-Z0-9]+_\d+[a-zA-Z0-9]*)[_\.\s:]/i.test(s);
+}
+
+// True if this is a demographics variable (D_1, D_2, etc.) — used as a stop sentinel
+function isDemo(s){return /^D_\d+[\s_]/i.test(s);}
+
+// Known demographic keyword suffixes — used to detect Q##_-prefixed demo vars
+var DEMO_KEYWORDS=/years.in|own.or.rent|child.in|child.under|race|ethnicity|gender|sex|^age$|\bage\b|party|registration|education|income|ideology|how.long|reside|household|marital|employ/i;
+
+// True if a Q##_-prefixed variable appears to be a demographic question
+function isQDemo(s){
+  var m=s.match(/^Q\d+[a-z]*[_\s](.+)$/i);
+  if(!m)return false;
+  return DEMO_KEYWORDS.test(m[1]);
+}
 
 function parseData(rows){
   var qi=[];
-  for(var i=0;i<rows.length;i++)if(isQ(cv(rows[i],0)))qi.push(i);
+  for(var i=0;i<rows.length;i++){
+    var v=cv(rows[i],0);
+    if(isDemo(v))break; // stop indexing once D_-prefixed demographics begin
+    if(isQ(v)&&!isQDemo(v))qi.push(i);
+  }
   var out=[];
-  var SKIP={Count:1,'Column %':1,'Sample Size':1};
+  var SKIP={Count:1,'Column %':1,'Sample Size':1,'Valid Cases':1,'Total Mentions':1,'% Total Mentions':1};
+
   for(var k=0;k<qi.length;k++){
     var qr=qi[k], nq=k+1<qi.length?qi[k+1]:rows.length;
     var lbl=cv(rows[qr],0);
     var txt=qr>0?cv(rows[qr-1],0):'';
     if(cv(rows[qr+1],0)!=='Sample Size')continue;
     var ss=parseFloat(cv(rows[qr+1],1))||0;
+
+    // Detect SATA: look for 'Valid Cases' or 'Total Mentions' in the block
+    var isSATA=false;
+    for(var r=qr+1;r<Math.min(qr+5,nq);r++){
+      var chk=cv(rows[r],0);
+      if(chk==='Valid Cases'||chk==='Total Mentions'){isSATA=true;break;}
+    }
+
+    var opts=[], pending=null;
+
+    if(isSATA){
+      // SATA format: sub-items are labeled rows (SD_B4_1a etc.), each followed by Mentions / % Valid Cases
+      var totalMentions=0;
+      for(var r=qr+1;r<nq;r++){
+        var r0=cv(rows[r],0),r1=cv(rows[r],1);
+        if(isDemo(r0)||isQDemo(r0))break; // stop at demographics
+        if(r0==='Total Mentions'){totalMentions=parseFloat(r1)||0;continue;}
+        if(SKIP[r0])continue;
+        if(!r0)continue;
+        // Sub-items match the single-letter suffix pattern we excluded from isQ
+        if(/^S[A-Z]_[A-Z0-9]+_\d+[a-z]\s/i.test(r0)){pending={label:stripVarPrefix(r0),count:0,pct:0,isSATA:true};continue;}
+        if(r0==='Mentions'&&pending){pending.count=parseFloat(r1)||0;continue;}
+        if(r0==='% Valid Cases'&&pending){pending.pct=parseFloat(r1)||0;opts.push(pending);pending=null;continue;}
+      }
+    } else {
+      // Standard format
+      for(var r=qr+2;r<nq;r++){
+        var r0=cv(rows[r],0),r1=cv(rows[r],1);
+        if(isDemo(r0)||isQDemo(r0))break; // stop at demographics
+        if(!r0)continue;
+        if(r0==='Count'){if(pending!==null){opts.push({label:pending,count:parseFloat(r1)||0,pct:0});pending=null;}continue;}
+        if(r0==='Column %'){if(opts.length)opts[opts.length-1].pct=parseFloat(r1)||0;continue;}
+        if(SKIP[r0])continue;
+        if(r1==='')pending=r0;
+      }
+    }
+
+    if(opts.length)out.push({lbl:lbl,txt:txt,ss:ss,opts:opts,isSATA:isSATA});
+  }
+  return out;
+}
+
+function parseDemos(rows){
+  // Find where demo variables start — supports both D_# and Q##_ style
+  var start=-1;
+  for(var i=0;i<rows.length;i++){
+    var v=cv(rows[i],0);
+    if(isDemo(v)||isQDemo(v)){start=i;break;}
+  }
+  if(start<0)return[];
+  // Index demo variable rows
+  var di=[];
+  for(var i=start;i<rows.length;i++){
+    var v=cv(rows[i],0);
+    if(isDemo(v)||isQDemo(v))di.push(i);
+  }
+  var out=[];
+  var SKIP={Count:1,'Column %':1,'Sample Size':1};
+  for(var k=0;k<di.length;k++){
+    var dr=di[k], nd=k+1<di.length?di[k+1]:rows.length;
+    var lbl=cv(rows[dr],0);
+    var txt=dr>0?cv(rows[dr-1],0):'';
+    // Extract readable name: "D_1 Sex" → "Sex", "Q51_Gender" → "Gender", or use prior row text
+    var name=lbl.replace(/^D_\d+\s+/i,'').replace(/^Q\d+[a-z]*[_\s]+/i,'').replace(/_/g,' ');
+    if(!name&&txt)name=txt.replace(/_/g,' ');
+    if(cv(rows[dr+1],0)!=='Sample Size')continue;
+    var ss=parseFloat(cv(rows[dr+1],1))||0;
     var opts=[],pending=null;
-    for(var r=qr+2;r<nq;r++){
+    for(var r=dr+2;r<nd;r++){
       var r0=cv(rows[r],0),r1=cv(rows[r],1);
       if(!r0)continue;
       if(r0==='Count'){if(pending!==null){opts.push({label:pending,count:parseFloat(r1)||0,pct:0});pending=null;}continue;}
@@ -170,17 +286,67 @@ function parseData(rows){
       if(SKIP[r0])continue;
       if(r1==='')pending=r0;
     }
-    if(opts.length)out.push({lbl:lbl,txt:txt,ss:ss,opts:opts});
+    if(opts.length)out.push({name:name,txt:txt,ss:ss,opts:opts});
   }
   return out;
+}
+
+function buildDemoSection(demos){
+  if(!demos||!demos.length)return'';
+  var html='<div id="qdemos" style="page-break-before:always;margin-bottom:3rem;">';
+  html+='<div style="padding-bottom:14px;border-bottom:2px solid #32127A;margin-bottom:2rem;">';
+  html+='<h2 style="font-size:18px;font-weight:700;color:#32127A;margin-bottom:2px;letter-spacing:0.02em;">Survey Demographics</h2>';
+  html+='<div style="font-size:12px;color:#888;">Sample composition of survey respondents</div>';
+  html+='</div>';
+  html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem 2.5rem;">';
+  for(var d=0;d<demos.length;d++){
+    var demo=demos[d];
+    html+='<div style="break-inside:avoid;">';
+    // Demo name header
+    html+='<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#32127A;border-bottom:2px solid #32127A;padding-bottom:5px;margin-bottom:8px;">'+demo.name+'</div>';
+    // Rows
+    for(var i=0;i<demo.opts.length;i++){
+      var o=demo.opts[i];
+      var pct=((parseFloat(o.pct)||0)*100);
+      var pctStr=pct.toFixed(1)+'%';
+      html+='<div style="display:flex;align-items:center;margin-bottom:5px;gap:8px;">';
+      // Label
+      html+='<div style="font-size:12px;color:#333;flex:1;line-height:1.3;">'+o.label+'</div>';
+      // Bar + pct
+      html+='<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">';
+      var barW=Math.max(Math.round(pct*1.2),2); // max ~120px at 100%
+      html+='<div style="width:'+barW+'px;height:10px;background:#32127A;border-radius:2px;"></div>';
+      html+='<div style="font-size:12px;font-weight:700;color:#32127A;width:36px;text-align:right;">'+pctStr+'</div>';
+      html+='</div>';
+      html+='</div>';
+    }
+    html+='</div>';
+  }
+  html+='</div>';
+  html+='<div style="font-size:11px;color:#aaa;display:flex;justify-content:space-between;margin-top:2rem;padding-top:8px;border-top:1px solid #e0e0e0;">';
+  html+='<span>'+reportMeta.foot+'</span><span>Demographics</span></div>';
+  html+='</div>';
+  return html;
+}
+
+// Strip variable prefix like "SD_B4_1a " from SATA sub-item labels
+function stripVarPrefix(s){
+  var m=s.match(/^S[A-Z]_[A-Z0-9]+_\d+[a-zA-Z]*\s+(.+)$/i);
+  if(m)return m[1].replace(/_/g,' ');
+  var m2=s.match(/^[A-Z0-9_]+\s+(.+)$/i);
+  return m2?m2[1].replace(/_/g,' '):s.replace(/_/g,' ');
 }
 
 function toP(v){return(parseFloat(v)||0)*100;}
 function fmtP(v){return toP(v).toFixed(1)+'%';}
 function fmtN(v){return Math.round(v).toLocaleString();}
 function parseLabel(s){
-  var m=s.match(/^(Q\d+[a-zA-Z]?)[_\.\s](.+)$/i);
-  return m?[m[1].toUpperCase(),m[2].replace(/_/g,' ')]:['',s];
+  // Q1: View of Russia, Q8r1_Blackburn, Q3_Party, SA_B1_1 Trump Foreign Policy, etc.
+  var m=s.match(/^(Q\d+(?:r\d+)?)[_\.\s:](.+)$/i);
+  if(m)return[m[1].toUpperCase(),m[2].replace(/^[\s:]+/,'').replace(/_/g,' ')];
+  var m2=s.match(/^(S[A-Z]_[A-Z0-9]+_\d+[a-zA-Z0-9]*)\s+(.+)$/i);
+  if(m2)return[m2[1].toUpperCase(),m2[2].replace(/_/g,' ')];
+  return['',s];
 }
 
 function buildQBlock(q, idx, total){
@@ -203,7 +369,7 @@ function buildQBlock(q, idx, total){
     chart+='<td style="width:220px;font-size:12px;color:#444;text-align:right;padding-right:20px;line-height:1.4;vertical-align:middle;">'+opts[ci].label+'</td>';
     chart+='<td style="vertical-align:middle;padding:3px 0;">';
     chart+='<table style="border-collapse:collapse;"><tr>';
-    chart+='<td style="width:'+w+'px;height:22px;background-color:#5b7be8;font-size:1px;">&nbsp;</td>';
+    chart+='<td style="width:'+w+'px;height:22px;background-color:#16245F;font-size:1px;">&nbsp;</td>';
     chart+='<td style="font-size:12px;color:#444;padding-left:8px;vertical-align:middle;">'+fmtP(opts[ci].pct)+'</td>';
     chart+='</tr></table>';
     chart+='</td></tr>';
@@ -211,11 +377,12 @@ function buildQBlock(q, idx, total){
   chart+='</table>';
 
   // Data table
+  var isSATA=q.isSATA||false;
   var table='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">';
   table+='<thead><tr>';
   table+='<th style="background-color:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;">Value</th>';
-  table+='<th style="background-color:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;">Frequency</th>';
-  table+='<th style="background-color:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;">Percent</th>';
+  table+='<th style="background-color:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;">'+(isSATA?'Mentions':'Frequency')+'</th>';
+  table+='<th style="background-color:#eef0f7;border:1px solid #c8cad4;padding:8px 12px;text-align:left;font-weight:700;color:#222;">'+(isSATA?'% of Respondents':'Percent')+'</th>';
   table+='</tr></thead><tbody>';
   for(var ti=0;ti<opts.length;ti++){
     table+='<tr>';
@@ -225,9 +392,9 @@ function buildQBlock(q, idx, total){
     table+='</tr>';
   }
   table+='<tr>';
-  table+='<td style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background-color:#e4e6ef;"><strong>Total</strong></td>';
-  table+='<td style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background-color:#e4e6ef;"><strong>'+fmtN(totalN)+'</strong></td>';
-  table+='<td style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background-color:#e4e6ef;"><strong>100%</strong></td>';
+  table+='<td style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background-color:#e4e6ef;"><strong>'+(isSATA?'Sample Size':'Total')+'</strong></td>';
+  table+='<td style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background-color:#e4e6ef;"><strong>'+fmtN(isSATA?q.ss:totalN)+'</strong></td>';
+  table+='<td style="border:1px solid #c8cad4;padding:7px 12px;font-weight:700;background-color:#e4e6ef;"><strong>'+(isSATA?'Select all that apply':'100%')+'</strong></td>';
   table+='</tr></tbody></table>';
 
   var block='<div id="q'+idx+'" style="margin-bottom:3rem;padding-bottom:2rem;border-bottom:1px solid #e0e0e0;page-break-inside:avoid;">';
@@ -243,15 +410,29 @@ function buildQBlock(q, idx, total){
 
 function buildReportHTML(){
   var total=questions.length;
+
+  // Cover page
+  var cover='<div style="page-break-after:always;min-height:90vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:4rem 2rem;">';
+  if(logoDataURL){
+    cover+='<img src="'+logoDataURL+'" style="max-width:240px;max-height:120px;object-fit:contain;margin-bottom:2.5rem;" />';
+  }
+  cover+='<div style="width:60px;height:2px;background:#16245F;margin:0 auto 2rem;"></div>';
+  cover+='<h1 style="font-size:32px;font-weight:400;color:#111;margin-bottom:1rem;line-height:1.3;">'+reportMeta.name+'</h1>';
+  cover+='<div style="font-size:18px;font-weight:700;color:#111;margin-bottom:2rem;">Survey Results</div>';
+  if(reportMeta.prep)cover+='<div style="font-size:14px;color:#555;margin-bottom:0.5rem;">Prepared by '+reportMeta.prep+'</div>';
+  if(reportMeta.meth)cover+='<div style="font-size:13px;color:#777;margin-top:1rem;max-width:500px;line-height:1.7;">'+reportMeta.meth+'</div>';
+  cover+='</div>';
+
+  // Question header bar (shows on each results page)
   var header='<div style="padding-bottom:14px;border-bottom:2px solid #bbb;margin-bottom:2rem;">';
-  header+='<h2 style="font-size:24px;font-weight:400;color:#111;margin-bottom:6px;">'+reportMeta.name+'</h2>';
-  header+='<div style="font-size:15px;font-weight:700;color:#111;margin-bottom:8px;">Survey Results</div>';
-  if(reportMeta.prep)header+='<div style="font-size:13px;color:#444;line-height:1.8;">Prepared by '+reportMeta.prep+'</div>';
-  if(reportMeta.meth)header+='<div style="font-size:13px;color:#444;line-height:1.8;">'+reportMeta.meth+'</div>';
+  header+='<h2 style="font-size:20px;font-weight:400;color:#111;margin-bottom:4px;">'+reportMeta.name+'</h2>';
+  header+='<div style="font-size:13px;font-weight:700;color:#111;">Survey Results</div>';
   header+='</div>';
+
   var blocks='';
   for(var i=0;i<questions.length;i++)blocks+=buildQBlock(questions[i],i,total);
-  return header+blocks;
+  blocks+=buildDemoSection(demos);
+  return cover+header+blocks;
 }
 
 function buildScreenReport(reportHTML){
@@ -260,6 +441,7 @@ function buildScreenReport(reportHTML){
     var lp=parseLabel(questions[i].lbl);
     nav+='<button onclick="scrollQ('+i+')">'+(lp[0]||'Q'+(i+1))+'</button>';
   }
+  if(demos&&demos.length)nav+='<button onclick="scrollDemo()">Demographics</button>';
   nav+='</div>';
   return nav+reportHTML;
 }
@@ -270,6 +452,14 @@ function buildDownloadFile(reportHTML){
   full+='@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}</style>';
   full+='</head><body>'+reportHTML+'</body></html>';
   return full;
+}
+
+function scrollDemo(){
+  var el=document.getElementById('qdemos');
+  if(el)el.scrollIntoView({behavior:'smooth',block:'start'});
+  var btns=document.querySelectorAll('.q-nav button');
+  for(var i=0;i<btns.length;i++)btns[i].classList.remove('active');
+  btns[btns.length-1].classList.add('active');
 }
 
 function scrollQ(idx){
